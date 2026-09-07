@@ -26,8 +26,8 @@ local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.
 
 -- Create Window
 local Window = Fluent:CreateWindow({
-    Title = "Indo Voice Hub",
-    SubTitle = "by Noirvan",
+    Title = "Indo Voice",
+    SubTitle = "by Atrama",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true,
@@ -118,30 +118,14 @@ end
 --------------------------------------------------------------------------------
 -- AUTO FISHING SYSTEM
 --------------------------------------------------------------------------------
-local function getFishingRod()
+local function getHeldRod()
     local char = LocalPlayer.Character
-    if char then
-        local r = char:FindFirstChildOfClass("Tool")
-        if r and r:GetAttribute("IsRod") then return r end
-    end
-    local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
-    if bp then
-        for _, t in ipairs(bp:GetChildren()) do
-            if t:IsA("Tool") and t:GetAttribute("IsRod") then return t end
-        end
+    if not char then return nil end
+    local tool = char:FindFirstChildOfClass("Tool")
+    if tool and (tool:GetAttribute("IsRod") or string.find(tool.Name, "Rod")) then
+        return tool
     end
     return nil
-end
-
-local function equipFishingRod()
-    local rod = getFishingRod()
-    if not rod then return nil end
-    local char = LocalPlayer.Character
-    if rod.Parent ~= char and char and char:FindFirstChild("Humanoid") then
-        char.Humanoid:EquipTool(rod)
-        task.wait(0.3)
-    end
-    return rod
 end
 
 local function setFishingStatus(s)
@@ -182,72 +166,89 @@ local function sellFishNow()
     return ok and res, msg
 end
 
--- Full single catch lifecycle
+-- Helper: Tunggu animasi memancing selesai secara natural (agar tidak dicurigai player lain)
+local function waitForAnimationToSettle(maxWait)
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local anim = hum and hum:FindFirstChildOfClass("Animator")
+    local t0 = tick()
+    maxWait = maxWait or 2.2
+    
+    while tick() - t0 < maxWait do
+        if anim then
+            local isReeling = false
+            for _, track in ipairs(anim:GetPlayingAnimationTracks()) do
+                local name = string.lower(track.Name)
+                local id = track.Animation and track.Animation.AnimationId or ""
+                -- Cek apakah animasi tarik ikan (Pull / Catch) masih jalan
+                if string.find(name, "pull") or string.find(name, "catch") or string.find(id, "136444937709795") then
+                    isReeling = true
+                    break
+                end
+            end
+            -- Jika animasi reel sudah berhenti dan sudah berlalu minimal 1.6s (wajar di mata pemain lain)
+            if not isReeling and (tick() - t0 >= 1.6) then
+                break
+            end
+        else
+            if tick() - t0 >= 1.8 then break end
+        end
+        task.wait(0.1)
+    end
+end
+
+-- Full single catch lifecycle:
+-- 1. Tidak pernah lepas / unequip rod (rod tetap dipegang terus di tangan)
+-- 2. Tahan lemparan (hold cast) sampai 100% MAKSIMAL (1.1s)
+-- 3. Begitu selesai memancing, langsung lempar ulang secara otomatis
+-- 4. Memperhatikan timing animasi agar tampak natural dan tidak dicurigai
 local function doCatchCycle()
     local char = LocalPlayer.Character
     if not char or not char:FindFirstChild("Humanoid") then
-        setFishingStatus("Waiting for Character...")
+        setFishingStatus("Menunggu Karakter...")
         task.wait(1)
         return false
     end
     
-    local rod = getFishingRod()
+    -- Pastikan player sedang memegang rod di tangan (tidak ada auto equip/unequip)
+    local rod = getHeldRod()
     if not rod then
-        setFishingStatus("No Fishing Rod Found!")
-        task.wait(1.5)
+        setFishingStatus("Pegang Fishing Rod di tangan untuk mulai memancing...")
+        task.wait(0.8)
         return false
     end
     
-    setFishingStatus("Equipping Rod...")
-    local currentToken = nil
-    local tokenConn = rod.ToolReady.OnClientEvent:Connect(function(tok)
-        currentToken = tok
-    end)
+    -- STEP 1: Mulai lempar kail dengan HOLD SAMPAI MAKSIMAL (100%)
+    setFishingStatus("Menahan lemparan hingga maksimal (100%)...")
+    local vp = workspace.CurrentCamera.ViewportSize
+    local cx, cy = vp.X * 0.85, vp.Y * 0.5
     
-    -- Re-equipping guarantees fresh token from server in ~0.25s
-    char.Humanoid:UnequipTools()
-    task.wait(0.2)
-    local equippedRod = equipFishingRod()
+    -- Tahan tombol klik selama 1.1s (Game MAX_PRESS_DURATION adalah 1.0s -> 100% max power)
+    VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
+    task.wait(1.1)
+    VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
     
-    local tTok = tick()
-    while not currentToken and tick() - tTok < 3.5 do
-        task.wait(0.05)
-    end
-    tokenConn:Disconnect()
-    
-    if not currentToken then
-        setFishingStatus("ToolReady Token Timeout, retrying...")
-        task.wait(0.5)
-        return false
-    end
-    
-    setFishingStatus("Casting Line into water...")
-    local okCast, castRes = pcall(function()
-        return equippedRod.Cast:InvokeServer(1.2, currentToken)
-    end)
-    
-    if not okCast or not castRes then
-        setFishingStatus("Cast Failed, retrying...")
-        task.wait(0.5)
-        return false
-    end
-    
-    setFishingStatus("Waiting for Fish to bite (approx 10-20s)...")
+    setFishingStatus("Kail terlempar! Menunggu ikan memakan umpan...")
     local tWait = tick()
     local fui = nil
     while FishingState.Active and tick() - tWait < 35 do
+        if not getHeldRod() then
+            setFishingStatus("Rod dilepas! Pegang rod kembali untuk lanjut...")
+            return false
+        end
         fui = PlayerGui:FindFirstChild("FishingUI")
         if fui then break end
-        task.wait(0.2)
+        task.wait(0.15)
     end
     
     if not fui then
-        setFishingStatus("Bite Timeout, re-casting...")
+        setFishingStatus("Umpan belum dimakan, melempar ulang...")
+        task.wait(0.5)
         return false
     end
     
-    -- STEP 1: Pre-Fishing Mechanic ("Drag your bait to the fish")
-    setFishingStatus("Fish hooked! Solving bait drag...")
+    -- STEP 2: Pre-Fishing Mechanic ("Drag your bait to the fish")
+    setFishingStatus("Ikan menyambar! Menyelesaikan geser umpan...")
     local preHolder = fui:WaitForChild("PreFishingHolder", 3.5)
     local tPre = tick()
     while FishingState.Active and preHolder and preHolder.Visible and tick() - tPre < 6 do
@@ -255,7 +256,8 @@ local function doCatchCycle()
         local target = preHolder:FindFirstChild("TargetFrame")
         if dragBtn and target then
             if FishingState.Mode == "Legit" then
-                dragBtn.Position = dragBtn.Position:Lerp(target.Position, 0.5)
+                -- Geser halus (smooth lerp) seperti gerakan tangan manusia
+                dragBtn.Position = dragBtn.Position:Lerp(target.Position, 0.45)
             else
                 dragBtn.Position = target.Position
             end
@@ -267,14 +269,13 @@ local function doCatchCycle()
                 end
             end
         end
-        task.wait(0.08)
+        task.wait(0.06)
     end
     
-    -- STEP 2: Reel Minigame Mechanic ("Click/tap to raise the bar!" vs "Stop click/tap")
-    setFishingStatus("Reeling in fish! Auto-clicking green bar...")
+    -- STEP 3: Reel Minigame Mechanic ("Click/tap to raise the bar!" vs "Stop click/tap")
+    setFishingStatus("Menarik ikan! Mengklik bar hijau...")
     local fishHolder = fui:WaitForChild("FishingHolder", 4.5)
     local tReel = tick()
-    local clickDelay = (FishingState.Mode == "Fast") and 0.08 or 0.125
     
     while FishingState.Active and fui.Parent and tick() - tReel < 20 do
         if fishHolder and fishHolder.Visible then
@@ -290,32 +291,41 @@ local function doCatchCycle()
             end
             
             if canClick then
-                -- Send Mouse Click to raise the bar
-                VirtualInputManager:SendMouseButtonEvent(100, 100, 0, true, game, 0)
-                task.wait(0.03)
-                VirtualInputManager:SendMouseButtonEvent(100, 100, 0, false, game, 0)
-                task.wait(clickDelay)
+                -- Kirim klik mouse dengan ritme natural
+                VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
+                task.wait(0.025)
+                VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
+                
+                -- Variasi jeda natural (120ms - 145ms) agar terlihat seperti manusia mengklik
+                local jitter = (FishingState.Mode == "Fast") and 0.08 or (math.random(120, 145) / 1000)
+                task.wait(jitter)
             else
-                -- "Stop click/tap" (Red state) - pause clicking to prevent penalty
-                task.wait(0.06)
+                -- Indikator Merah ("Stop click/tap") - segera berhenti agar tidak kena penalti
+                task.wait(0.05)
             end
         else
-            task.wait(0.1)
+            -- Minigame selesai! Keluar langsung
+            break
         end
     end
     
-    -- Catch completed!
+    -- Tangkapan selesai!
     FishingState.SessionCatches = FishingState.SessionCatches + 1
-    setFishingStatus("Fish caught! Total: " .. tostring(FishingState.SessionCatches))
+    setFishingStatus("Ikan berhasil didapat! Total: " .. tostring(FishingState.SessionCatches))
     updateStatsLabels()
     
-    -- Check Auto Sell
+    -- Cek Auto Sell jika diaktifkan
     if FishingState.AutoSell and (FishingState.SessionCatches % FishingState.AutoSellInterval == 0) then
         sellFishNow()
     end
     
-    -- Cooldown buffer for server to register reward
-    task.wait(2.2)
+    -- STEP 4: Perhatikan animasi memancing & kurangi kecurigaan player lain
+    -- Tunggu animasi reel-in dan notifikasi hadiah selesai secara natural (~1.6 - 2.0 detik)
+    -- ROD TETAP DIPEGANG (tidak pernah dilepas / di-unequip)
+    setFishingStatus("Animasi tangkapan selesai, bersiap mancing ulang...")
+    waitForAnimationToSettle(2.2)
+    
+    -- Langsung ulang siklus berikutnya tanpa jeda tambahan!
     return true
 end
 
@@ -390,12 +400,15 @@ task.spawn(function()
         if MiningState.Active then
             local pick = equipPickaxe()
             if pick then
+                -- Click rock
                 VirtualInputManager:SendMouseButtonEvent(100, 100, 0, true, game, 0)
                 task.wait(0.1)
                 VirtualInputManager:SendMouseButtonEvent(100, 100, 0, false, game, 0)
                 
+                -- Check for MiningUI
                 local mui = PlayerGui:FindFirstChild("MiningUI")
                 if mui then
+                    -- Solve pre-drag if present
                     local pre = mui:FindFirstChild("PreMiningHolder")
                     if pre and pre.Visible then
                         local drag = pre:FindFirstChild("DragButton")
@@ -408,6 +421,7 @@ task.spawn(function()
                             end
                         end
                     end
+                    -- Solve zone click
                     local holder = mui:FindFirstChild("MiningHolder")
                     if holder and holder.Visible then
                         task.wait(0.2)
@@ -430,7 +444,7 @@ end)
 do
     Tabs.Fishing:AddParagraph({
         Title = "Indo Voice Auto Fishing 🎣",
-        Content = "Automates the entire fishing process: casting, dragging bait to fish, and hitting the green bar while stopping on red!"
+        Content = "Hanya aktif saat kamu MEMEGANG Fishing Rod (tanpa unequip/equip ulang).\nOtomatis hold cast sampai bar penuh 100% (jarak maksimal), auto drag umpan ke ikan, dan auto reel klik saat hijau & berhenti saat merah!"
     })
 
     FishingState.StatusLabel = Tabs.Fishing:AddParagraph({
@@ -450,7 +464,7 @@ do
     updateStatsLabels()
 
     local AutoFishToggle = Tabs.Fishing:AddToggle("AutoFishToggle", {
-        Title = "Enable Auto Fishing",
+        Title = "Enable Auto Fishing (Hold Rod)",
         Default = false,
         Callback = function(v)
             FishingState.Active = v
@@ -459,7 +473,7 @@ do
             end
             Fluent:Notify({
                 Title = "Auto Fishing",
-                Content = v and "Auto Fishing Started!" or "Auto Fishing Stopped.",
+                Content = v and "Auto Fishing Aktif! Pastikan sedang memegang rod." or "Auto Fishing Nonaktif.",
                 Duration = 3
             })
         end
@@ -474,19 +488,6 @@ do
                 FishingState.Mode = "Fast"
             else
                 FishingState.Mode = "Legit"
-            end
-        end
-    })
-
-    Tabs.Fishing:AddButton({
-        Title = "Equip Fishing Rod",
-        Description = "Equips the best fishing rod from your backpack",
-        Callback = function()
-            local r = equipFishingRod()
-            if r then
-                Fluent:Notify({ Title = "Rod Equipped", Content = "Equipped: " .. r.Name, Duration = 2.5 })
-            else
-                Fluent:Notify({ Title = "No Rod", Content = "Could not find a rod in backpack!", Duration = 3 })
             end
         end
     })
@@ -575,6 +576,7 @@ do
         end
     })
 
+    -- Teleport to specific boulders
     local stoneNames = {}
     local stonePositions = {
         ["Boulder 1 (Town 56, 39, -4712)"] = Vector3.new(56, 40, -4712),
@@ -769,9 +771,12 @@ do
         Title = "Auto Claim Daily & Session Loop",
         Description = "Checks and collects daily and session rewards every 60 seconds",
         Default = true,
-        Callback = function(v) end
+        Callback = function(v)
+            -- Handled in background loop
+        end
     })
 
+    -- Background reward check loop
     task.spawn(function()
         while true do
             pcall(function()
@@ -802,6 +807,7 @@ do
         end
     })
 
+    -- Anti-AFK Hook
     LocalPlayer.Idled:Connect(function()
         if PlayerMods.AntiAFK then
             VirtualUser:CaptureController()
@@ -845,6 +851,7 @@ do
         end
     })
 
+    -- Keep Walkspeed and Jumppower on respawn
     LocalPlayer.CharacterAdded:Connect(function(char)
         local hum = char:WaitForChild("Humanoid")
         hum.WalkSpeed = PlayerMods.WalkSpeed
