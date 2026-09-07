@@ -26,8 +26,8 @@ local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.
 
 -- Create Window
 local Window = Fluent:CreateWindow({
-    Title = "Indo Voice Hub 🎣",
-    SubTitle = "by Antigravity",
+    Title = "Indo Voice Hub",
+    SubTitle = "by Noirvan",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true,
