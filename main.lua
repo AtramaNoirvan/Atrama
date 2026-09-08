@@ -57,8 +57,7 @@ local FishingState = {
     Status = "Idle",
     StatusLabel = nil,
     CountLabel = nil,
-    InventoryLabel = nil,
-    HideMinusLabels = true
+    InventoryLabel = nil
 }
 
 local MiningState = {
@@ -537,39 +536,7 @@ do
             end
         end
     })
-
-    Tabs.Fishing:AddToggle("HideMinusLabelsToggle", {
-        Title = "Hide Debuff Labels (Hilangkan Teks Minus)",
-        Description = "Menyembunyikan teks peringatan Solo Fishing -15% & Private Server dari layar",
-        Default = true,
-        Callback = function(v)
-            FishingState.HideMinusLabels = v
-        end
-    })
 end
-
--- Background Cleaner: Sembunyikan label minus (Solo Fishing -15% & Private Server 50%) jika aktif
-task.spawn(function()
-    while true do
-        if FishingState.HideMinusLabels then
-            pcall(function()
-                local lvl = PlayerGui:FindFirstChild("LevelUI")
-                if lvl then
-                    local frame = lvl:FindFirstChild("LevelFrame", true)
-                    if frame then
-                        local prox = frame:FindFirstChild("ProximityLabel")
-                        local priv = frame:FindFirstChild("PrivateServerLabel")
-                        local cool = frame:FindFirstChild("CooldownLabel")
-                        if prox and prox.Visible then prox.Visible = false end
-                        if priv and priv.Visible then priv.Visible = false end
-                        if cool and cool.Visible then cool.Visible = false end
-                    end
-                end
-            end)
-        end
-        task.wait(0.3)
-    end
-end)
 
 --------------------------------------------------------------------------------
 -- UI BUILD: TAB 2 - MINING
