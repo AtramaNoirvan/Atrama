@@ -27,7 +27,7 @@ local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.
 -- Create Window
 local Window = Fluent:CreateWindow({
     Title = "Indo Voice",
-    SubTitle = "by Atrama",
+    SubTitle = "by Noir",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true,
@@ -57,7 +57,8 @@ local FishingState = {
     Status = "Idle",
     StatusLabel = nil,
     CountLabel = nil,
-    InventoryLabel = nil
+    InventoryLabel = nil,
+    HideMinusLabels = true
 }
 
 local MiningState = {
@@ -248,60 +249,70 @@ local function doCatchCycle()
     end
     
     -- STEP 2: Pre-Fishing Mechanic ("Drag your bait to the fish")
-    setFishingStatus("Ikan menyambar! Menyelesaikan geser umpan...")
+    setFishingStatus("Ikan menyambar! Mengarahkan umpan secara halus...")
     local preHolder = fui:WaitForChild("PreFishingHolder", 3.5)
     local tPre = tick()
-    while FishingState.Active and preHolder and preHolder.Visible and tick() - tPre < 6 do
+    -- Perlambat durasi pre-fishing minimal 1.5 detik agar menyerupai gerakan tangan manusia
+    -- dan menghindari deteksi kecurigaan (suspicion) dari server
+    local minDragDuration = (FishingState.Mode == "Fast") and 0.9 or 1.6
+    
+    while FishingState.Active and preHolder and preHolder.Visible and tick() - tPre < 9 do
         local dragBtn = preHolder:FindFirstChild("DragButton")
         local target = preHolder:FindFirstChild("TargetFrame")
         if dragBtn and target then
-            if FishingState.Mode == "Legit" then
-                -- Geser halus (smooth lerp) seperti gerakan tangan manusia
-                dragBtn.Position = dragBtn.Position:Lerp(target.Position, 0.45)
+            local elapsed = tick() - tPre
+            if elapsed < minDragDuration then
+                -- Geser perlahan (lerp halus ~0.12) mendekati target secara natural
+                dragBtn.Position = dragBtn.Position:Lerp(target.Position, 0.12)
             else
-                dragBtn.Position = target.Position
-            end
-            
-            local dd = dragBtn:FindFirstChildOfClass("UIDragDetector")
-            if dd and getconnections then
-                for _, c in ipairs(getconnections(dd.DragContinue)) do
-                    pcall(function() c:Fire() end)
+                -- Setelah durasi wajar tercapai, arahkan ke target dan selesaikan
+                dragBtn.Position = dragBtn.Position:Lerp(target.Position, 0.35)
+                local dd = dragBtn:FindFirstChildOfClass("UIDragDetector")
+                if dd and getconnections then
+                    for _, c in ipairs(getconnections(dd.DragContinue)) do
+                        pcall(function() c:Fire() end)
+                    end
                 end
             end
         end
-        task.wait(0.06)
+        task.wait(0.05)
     end
     
     -- STEP 3: Reel Minigame Mechanic ("Click/tap to raise the bar!" vs "Stop click/tap")
-    setFishingStatus("Menarik ikan! Mengklik bar hijau...")
+    setFishingStatus("Menarik ikan! Mengklik bar hijau secara stabil...")
     local fishHolder = fui:WaitForChild("FishingHolder", 4.5)
     local tReel = tick()
     
-    while FishingState.Active and fui.Parent and tick() - tReel < 20 do
+    while FishingState.Active and fui.Parent and tick() - tReel < 25 do
         if fishHolder and fishHolder.Visible then
             local ff = fishHolder:FindFirstChild("FishingFrame")
             local info = ff and ff:FindFirstChild("InfoLabel")
             local fishIcon = ff and ff:FindFirstChild("FishContainer") and ff.FishContainer:FindFirstChild("FishIcon")
             
-            local canClick = false
-            if info and (string.find(info.Text, "Click") or string.find(info.Text, "raise")) then
-                canClick = true
-            elseif fishIcon and fishIcon.ImageColor3.G > 0.7 then
-                canClick = true
+            -- Cek status hijau secara ketat:
+            -- 1. InfoLabel TIDAK mengandung kata "Stop"
+            -- 2. InfoLabel mengandung "Click" / "raise" ATAU warna icon ikan dominan hijau (G > 0.65 dan R < 0.65)
+            local isGreen = false
+            if info and not string.find(string.lower(info.Text), "stop") and (string.find(info.Text, "Click") or string.find(info.Text, "raise")) then
+                isGreen = true
+            elseif fishIcon and fishIcon.ImageColor3.G > 0.65 and fishIcon.ImageColor3.R < 0.65 then
+                isGreen = true
             end
             
-            if canClick then
+            if isGreen then
                 -- Kirim klik mouse dengan ritme natural
                 VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
-                task.wait(0.025)
+                task.wait(0.03)
                 VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
                 
-                -- Variasi jeda natural (120ms - 145ms) agar terlihat seperti manusia mengklik
-                local jitter = (FishingState.Mode == "Fast") and 0.08 or (math.random(120, 145) / 1000)
-                task.wait(jitter)
+                -- Jeda klik diperlama secara terukur agar tidak dicurigai server & tidak gagal:
+                -- Mode Legit: ~200ms - 260ms (sekitar 4 - 5 klik per detik, ritme manusia normal)
+                -- Mode Fast: ~140ms - 170ms
+                local clickDelay = (FishingState.Mode == "Fast") and (math.random(140, 170) / 1000) or (math.random(200, 260) / 1000)
+                task.wait(clickDelay)
             else
-                -- Indikator Merah ("Stop click/tap") - segera berhenti agar tidak kena penalti
-                task.wait(0.05)
+                -- Indikator Merah ("Stop click/tap"): BERHENTI TOTAL agar tidak kena penalti bar (-0.1) yang bikin ikan lepas!
+                task.wait(0.08)
             end
         else
             -- Minigame selesai! Keluar langsung
@@ -526,7 +537,39 @@ do
             end
         end
     })
+
+    Tabs.Fishing:AddToggle("HideMinusLabelsToggle", {
+        Title = "Hide Debuff Labels (Hilangkan Teks Minus)",
+        Description = "Menyembunyikan teks peringatan Solo Fishing -15% & Private Server dari layar",
+        Default = true,
+        Callback = function(v)
+            FishingState.HideMinusLabels = v
+        end
+    })
 end
+
+-- Background Cleaner: Sembunyikan label minus (Solo Fishing -15% & Private Server 50%) jika aktif
+task.spawn(function()
+    while true do
+        if FishingState.HideMinusLabels then
+            pcall(function()
+                local lvl = PlayerGui:FindFirstChild("LevelUI")
+                if lvl then
+                    local frame = lvl:FindFirstChild("LevelFrame", true)
+                    if frame then
+                        local prox = frame:FindFirstChild("ProximityLabel")
+                        local priv = frame:FindFirstChild("PrivateServerLabel")
+                        local cool = frame:FindFirstChild("CooldownLabel")
+                        if prox and prox.Visible then prox.Visible = false end
+                        if priv and priv.Visible then priv.Visible = false end
+                        if cool and cool.Visible then cool.Visible = false end
+                    end
+                end
+            end)
+        end
+        task.wait(0.3)
+    end
+end)
 
 --------------------------------------------------------------------------------
 -- UI BUILD: TAB 2 - MINING
